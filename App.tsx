@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import MenuScreen from "./src/screens/MenuScreen";
 import TopUpScreen from "./src/screens/TopUpScreen";
 import SupportScreen from "./src/screens/SupportScreen";
@@ -9,6 +9,7 @@ import {
   I18nManager,
   Animated,
   Easing,
+  Alert,
 } from "react-native";
 import RideDetailsScreen from "./src/screens/RideDetailsScreen";
 import { NavigationContainer } from "@react-navigation/native";
@@ -20,13 +21,8 @@ import {
 import { supabase } from "./src/lib/supabase";
 import { Home, Clock, User } from "lucide-react-native";
 
-import {
-  useFonts,
-  Tajawal_400Regular,
-  Tajawal_500Medium,
-  Tajawal_700Bold,
-  Tajawal_800ExtraBold,
-} from "@expo-google-fonts/tajawal";
+// ✅ FIX: Use expo-font only (no specific names imported)
+import { useFonts } from "expo-font";
 
 import { LanguageProvider, useLanguage } from "./src/context/LanguageContext";
 
@@ -36,7 +32,7 @@ import PassengerDashboard from "./src/screens/PassengerDashboard";
 import HistoryScreen from "./src/screens/HistoryScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
 import AddSavedPlaceScreen from "./src/screens/AddSavedPlaceScreen";
-import CustomDrawer from "./src/CustomDrawer"; // Ensure path is correct
+import CustomDrawer from "./src/CustomDrawer"; 
 
 const Stack = createStackNavigator();
 const Drawer = createDrawerNavigator();
@@ -65,20 +61,17 @@ const ExactSlideUpTransition = {
 // 2. PASSENGER DRAWER
 // =================================================================
 function PassengerDrawer({ session }: any) {
-  // 1. Get isRTL from our custom context, NOT I18nManager
   const { t, language } = useLanguage();
   const isRTL = language === "ar";
 
   return (
     <Drawer.Navigator
-      // 2. Use the language string for the key to force re-render when lang changes
       key={`drawer-${language}-${session?.user?.id}`}
       id="LeftDrawer"
       screenOptions={{
         headerShown: false,
         swipeEnabled: false,
         drawerStyle: { width: 0 },
-        // 3. This manually moves the drawer to the Right if Arabic
         drawerPosition: isRTL ? "right" : "left",
       }}
     >
@@ -103,63 +96,106 @@ function MainApp() {
   const [loading, setLoading] = useState(true);
   const [navKey, setNavKey] = useState(0);
 
-  const { language } = useLanguage();
+  // ✅ FIX: Load fonts here so they are available everywhere
+  const [fontsLoaded] = useFonts({
+    "Tajawal_400Regular": require("./src/assets/fonts/Tajawal-Regular.ttf"),
+    "Tajawal_500Medium": require("./src/assets/fonts/Tajawal-Medium.ttf"),
+    "Tajawal_700Bold": require("./src/assets/fonts/Tajawal-Bold.ttf"),
+    "Tajawal_800ExtraBold": require("./src/assets/fonts/Tajawal-ExtraBold.ttf"),
+  });
 
-  // 1. DEFINE THIS FUNCTION FIRST (Before useEffect)
+  // We use a ref for role to access the latest value inside setTimeout closures
+  const roleRef = useRef<string | null>(null);
+
   const startRolePolling = (userId: string) => {
     setLoading(true);
+    
+    // Start Polling Interval
     const intervalId = setInterval(async () => {
-      // 👇 CHANGE 1: Select both columns or just roles
-      const { data } = await supabase
-        .from("profiles")
-        .select("role, roles") 
-        .eq("id", userId)
-        .single();
-        
-      // 👇 CHANGE 2: Check either column
-      if (data && (data.role || (data.roles && data.roles.includes("PASSENGER")))) {
-        clearInterval(intervalId);
-        // Prefer the array check if available, otherwise fallback to string
-        setRole(data.role || "PASSENGER"); 
-        setLoading(false);
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("role, roles, is_suspended")
+          .eq("id", userId)
+          .single();
+
+        if (error) throw error;
+
+        if (data) {
+          // CHECK SUSPENSION
+          if (data.is_suspended) {
+            clearInterval(intervalId);
+            setLoading(false);
+            
+            // Log out logic
+            await supabase.auth.signOut();
+            setSession(null);
+            setRole(null);
+            roleRef.current = null;
+            
+            Alert.alert(
+              "Account Suspended",
+              "Your account has been suspended. Please contact support."
+            );
+            return;
+          }
+
+          // CHECK ROLE
+          if (data.role || (data.roles && data.roles.includes("PASSENGER"))) {
+            clearInterval(intervalId);
+            const foundRole = data.role || "PASSENGER";
+            setRole(foundRole);
+            roleRef.current = foundRole;
+            setLoading(false);
+          }
+        }
+      } catch (err) {
+        console.log("Polling error (ignorable):", err);
       }
     }, 1000);
 
-    // Timeout to stop polling after 15 seconds if nothing found
+    // Safety Timeout: Stop polling after 15 seconds
     setTimeout(() => {
       clearInterval(intervalId);
-      // Only stop loading if we haven't found a role yet to avoid overwriting success state
-      if (!role) setLoading(false);
+      if (!roleRef.current) {
+        setLoading(false);
+      }
     }, 15000);
   };
 
-  // 2. NOW USE IT IN USEEFFECT
   useEffect(() => {
+    // Initial Session Check
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) startRolePolling(session.user.id);
-      else setLoading(false);
+      if (session) {
+        startRolePolling(session.user.id);
+      } else {
+        setLoading(false);
+      }
     });
 
+    // Auth State Listener
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
         setSession(session);
         if (session) {
-          // Force NavigationContainer recreation on login to fix Drawer RTL/LTR
-          setNavKey((prev) => prev + 1);
+          setNavKey((prev) => prev + 1); // Reset Nav for RTL updates
           startRolePolling(session.user.id);
         } else {
           setRole(null);
+          roleRef.current = null;
           setLoading(false);
         }
       }
     );
+
     return () => {
       authListener.subscription.unsubscribe();
     };
   }, []);
 
-  if (loading) {
+  // ✅ FIX: Wait for BOTH fonts and Auth loading
+  if (loading || !fontsLoaded) {
     return (
       <View
         style={{
@@ -175,17 +211,12 @@ function MainApp() {
   }
 
   return (
-    // CHANGE IS HERE: Remove the `key` prop that contained `language`
-    // We only keep `navKey` which is used for login/logout resets, not language changes.
     <NavigationContainer key={`nav-${navKey}`}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!session || !role ? (
           <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         ) : (
           <>
-            {/* The Dashboard contains the Drawer. 
-                The Drawer has its own key inside 'PassengerDrawer', 
-                so it will update internally without closing this parent Stack. */}
             <Stack.Screen name="Dashboard">
               {(props) => <PassengerDrawer {...props} session={session} />}
             </Stack.Screen>
@@ -238,7 +269,7 @@ function MainApp() {
 }
 
 // =================================================================
-// 4. EXPORT WRAPPED APP
+// 4. EXPORT
 // =================================================================
 export default function App() {
   return (

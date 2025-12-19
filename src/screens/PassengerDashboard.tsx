@@ -7,13 +7,9 @@ import { Audio } from "expo-av";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MapViewDirections from "react-native-maps-directions";
 import { GooglePlacesAutocompleteRef } from "react-native-google-places-autocomplete";
-import {
-  useFonts,
-  Tajawal_400Regular,
-  Tajawal_500Medium,
-  Tajawal_700Bold,
-  Tajawal_800ExtraBold,
-} from "@expo-google-fonts/tajawal";
+import { useFonts } from 'expo-font';
+import RatingModal from "../components/RatingModal";
+
 import {
   View,
   Text,
@@ -224,13 +220,8 @@ export default function PassengerDashboard({ session, navigation }: any) {
   const mapRef = useRef<MapView>(null);
   const pinTranslateY = useRef(new Animated.Value(0)).current;
 
-  const [fontsLoaded] = useFonts({
-    Tajawal_400Regular,
-    Tajawal_500Medium,
-    Tajawal_700Bold,
-    Tajawal_800ExtraBold,
-  });
-
+// Add this right after useFonts
+ 
   const confirmSheetAnim = useRef(new Animated.Value(height + 100)).current;
   // --- SMART RTL HELPERS ---
   const isRTL = language === "ar";
@@ -344,6 +335,8 @@ export default function PassengerDashboard({ session, navigation }: any) {
   const [isTyping, setIsTyping] = useState(false);
   const [recentPlaces, setRecentPlaces] = useState<any[]>([]);
   const [isPickupListVisible, setPickupListVisible] = useState(false);
+  const [isRatingVisible, setIsRatingVisible] = useState(false);
+  const [completedRideData, setCompletedRideData] = useState<any>(null);
 
   const slideAnim = useRef(new Animated.Value(height + 100)).current;
 
@@ -599,13 +592,26 @@ export default function PassengerDashboard({ session, navigation }: any) {
           ) {
             fetchDriverDetails(updated.driver_id);
           }
-          if (
-            updated.status === "COMPLETED" ||
-            updated.status === "CANCELLED"
-          ) {
-            resetState();
-            Alert.alert(t("update"), t("rideEnded"));
-          }
+          if (updated.status === "COMPLETED") {
+             // 1. Prepare data for the modal
+             setCompletedRideData({
+                id: updated.id,
+                driverId: updated.driver_id,
+                name: driverDetails?.full_name || "Driver"
+              });
+              
+             // 2. Show the modal
+             setIsRatingVisible(true);
+             
+             // 3. CRITICAL: DO NOT call resetState() here. 
+             // We wait until the user finishes rating.
+             
+          } else if (updated.status === "CANCELLED") {
+             // For cancellations, we reset immediately
+             Alert.alert(t("update"), t("rideEnded"));
+             resetState();
+          }            Alert.alert(t("update"), t("rideEnded"));
+          
         }
       )
       .subscribe();
@@ -618,7 +624,7 @@ export default function PassengerDashboard({ session, navigation }: any) {
   const fetchDriverDetails = async (driverId: string) => {
     const { data } = await supabase
       .from("profiles")
-      .select("*")
+      .select("*, average_rating, rating_count")
       .eq("id", driverId)
       .single();
     if (data) setDriverDetails(data);
@@ -2048,8 +2054,9 @@ useEffect(() => {
                       fontFamily: "Tajawal_500Medium",
                     }}
                   >
-                    4.9
+                    {driverDetails?.average_rating ? Number(driverDetails.average_rating).toFixed(1) : "5.0"}
                   </Text>
+                  <Text style={{ fontSize: 10, color: '#999' }}>({driverDetails?.rating_count || 0})</Text>
                 </View>
               </View>
               <TouchableOpacity style={styles.callBtn}>
@@ -2430,6 +2437,19 @@ useEffect(() => {
           </View>
         </View>
       )}
+      <RatingModal 
+        visible={isRatingVisible}
+        rideId={completedRideData?.id}
+        reviewerId={session.user.id}
+        revieweeId={completedRideData?.driverId}
+        revieweeName={completedRideData?.name}
+        revieweeRole="DRIVER"
+        onClose={() => {
+          setIsRatingVisible(false);
+          setCompletedRideData(null);
+          resetState();
+        }}
+      />
     </View>
   );
 }
