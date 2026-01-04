@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -6,16 +6,44 @@ import {
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
-  SafeAreaView,
-  I18nManager,
   StatusBar,
+  ScrollView,
+  RefreshControl,
 } from "react-native";
 import { supabase } from "../lib/supabase";
-import { ArrowLeft, Clock, MapPin } from "lucide-react-native";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Clock,
+  Calendar,
+  ChevronRight,
+  History,
+} from "lucide-react-native";
 import { useLanguage } from "../context/LanguageContext";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+// --- THEME CONSTANTS ---
+const COLORS = {
+  primary: "#111827",
+  mainPurple: "#775BD4",
+  accent: "#960082ff",
+  background: "#F3F4F6",
+  card: "#FFFFFF",
+  text: "#1F2937",
+  textLight: "#6B7280",
+  border: "#E5E7EB",
+  // Status Colors
+  successBg: "#d1fae5",
+  successText: "#047857",
+  dangerBg: "#fee2e2",
+  dangerText: "#b91c1c",
+  infoBg: "#e0f2fe", // For Scheduled
+  infoText: "#0284c7",
+};
 
 export default function HistoryScreen({ navigation, route }: any) {
   const { t, language } = useLanguage();
+  const insets = useSafeAreaInsets();
 
   // Dynamic Layout Helpers
   const isRTL = language === "ar";
@@ -25,7 +53,28 @@ export default function HistoryScreen({ navigation, route }: any) {
   const paramsSession = route.params?.session;
   const [session, setSession] = useState<any>(paramsSession);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
+
+  // FILTER STATE: 'ALL', 'SCHEDULED', 'COMPLETED', 'CANCELLED'
+  const [filter, setFilter] = useState<string>("ALL");
+
+  // This is the correct definition that handles loading state properly
+  const fetchHistory = async (showLoader = true) => {
+    if (showLoader) setLoading(true);
+
+    const { data, error } = await supabase
+      .from("rides")
+      .select("*")
+      .or(`passenger_id.eq.${session.user.id},driver_id.eq.${session.user.id}`)
+      .in("status", ["COMPLETED", "CANCELLED", "SCHEDULED"])
+      .order("created_at", { ascending: false });
+
+    if (error) console.log("History fetch error:", error);
+    if (data) setHistory(data);
+
+    if (showLoader) setLoading(false);
+  };
 
   // 1. Initialize Session
   useEffect(() => {
@@ -40,27 +89,22 @@ export default function HistoryScreen({ navigation, route }: any) {
     }
   }, []);
 
-  // 2. Fetch Data & Setup Realtime Listener
+  // 2. Fetch Data
   useEffect(() => {
     if (!session?.user?.id) return;
-
-    // A. Initial Fetch
     fetchHistory();
 
-    // B. Realtime Subscription (Listen for NEW rides or STATUS updates)
     const channel = supabase
       .channel("history_updates")
       .on(
         "postgres_changes",
         {
-          event: "*", // INSERT and UPDATE
+          event: "*",
           schema: "public",
           table: "rides",
           filter: `passenger_id=eq.${session.user.id}`,
         },
-        (payload) => {
-          handleRealtimeUpdate(payload);
-        }
+        () => fetchHistory()
       )
       .subscribe();
 
@@ -69,274 +113,488 @@ export default function HistoryScreen({ navigation, route }: any) {
     };
   }, [session]);
 
-  const fetchHistory = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("rides")
-      .select("*")
-      // Check both passenger OR driver columns (useful if you share logic)
-      .or(`passenger_id.eq.${session.user.id},driver_id.eq.${session.user.id}`)
-      .in("status", ["COMPLETED", "CANCELLED"])
-      .order("created_at", { ascending: false });
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    // Call fetchHistory with false so the full screen spinner doesn't appear
+    await fetchHistory(false);
+    setRefreshing(false);
+  }, [session]);
 
-    if (error) console.log("History fetch error:", error);
-    if (data) setHistory(data);
-    setLoading(false);
-  };
-
-  const handleRealtimeUpdate = (payload: any) => {
-    const { eventType, new: newRecord } = payload;
-    const isCompletedOrCancelled = ["COMPLETED", "CANCELLED"].includes(
-      newRecord.status
-    );
-
-    if (eventType === "INSERT" && isCompletedOrCancelled) {
-      // New historical ride? Add to top.
-      setHistory((prev) => [newRecord, ...prev]);
-    } else if (eventType === "UPDATE") {
-      setHistory((prev) => {
-        // If status changed to something we don't show (e.g. back to PENDING?), remove it
-        if (!isCompletedOrCancelled) {
-          return prev.filter((item) => item.id !== newRecord.id);
-        }
-
-        // Check if item exists in our list
-        const exists = prev.find((item) => item.id === newRecord.id);
-
-        if (exists) {
-          // Update existing item
-          return prev.map((item) =>
-            item.id === newRecord.id ? newRecord : item
-          );
-        } else {
-          // If it wasn't there (e.g. just became COMPLETED), add it to top
-          return [newRecord, ...prev];
-        }
-      });
-    }
+  const getFilteredData = () => {
+    if (filter === "ALL") return history;
+    return history.filter((item) => item.status === filter);
   };
 
   const formatDate = (dateString: string) => {
     if (!dateString) return "";
     const date = new Date(dateString);
+    return date.toLocaleDateString(isRTL ? "ar-DZ" : "en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  const formatTime = (dateString: string) => {
+    if (!dateString) return "";
+    const date = new Date(dateString);
+    return date.toLocaleTimeString(isRTL ? "ar-DZ" : "en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const getStatusStyle = (status: string) => {
+    if (status === "COMPLETED")
+      return {
+        bg: COLORS.successBg,
+        text: COLORS.successText,
+        label: t("statusCompleted") || "Completed",
+      };
+    if (status === "CANCELLED")
+      return {
+        bg: COLORS.dangerBg,
+        text: COLORS.dangerText,
+        label: t("statusCancelled") || "Cancelled",
+      };
+    if (status === "SCHEDULED")
+      return {
+        bg: COLORS.infoBg,
+        text: COLORS.infoText,
+        label: t("statusScheduled") || "Scheduled",
+      };
+    return { bg: "#f3f4f6", text: "#374151", label: status };
+  };
+
+  const renderFilterButton = (key: string, label: string) => {
+    const isActive = filter === key;
     return (
-      date.toLocaleDateString(isRTL ? "ar-DZ" : "en-US") +
-      " " +
-      date.toLocaleTimeString(isRTL ? "ar-DZ" : "en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
+      <TouchableOpacity
+        onPress={() => setFilter(key)}
+        style={[styles.filterBtn, isActive && styles.filterBtnActive]}
+      >
+        <Text
+          style={[styles.filterBtnText, isActive && styles.filterBtnTextActive]}
+        >
+          {label}
+        </Text>
+      </TouchableOpacity>
     );
   };
 
-  const getStatusText = (status: string) => {
-    if (status === "COMPLETED") return t("statusCompleted") || "Completed";
-    if (status === "CANCELLED") return t("statusCancelled") || "Cancelled";
-    return status;
+  const renderItem = ({ item }: { item: any }) => {
+    const statusStyle = getStatusStyle(item.status);
+
+    // For scheduled rides, usually show scheduled_time, else created_at
+    const displayDate = item.scheduled_time || item.created_at;
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => navigation.navigate("RideDetails", { ride: item })}
+        style={styles.card}
+      >
+        {/* --- Header: Date & Price --- */}
+        <View style={[styles.cardHeader, { flexDirection }]}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <View
+              style={[
+                styles.dateBadge,
+                item.status === "SCHEDULED" && {
+                  backgroundColor: COLORS.infoBg,
+                },
+              ]}
+            >
+              {item.status === "SCHEDULED" ? (
+                <Clock size={14} color={COLORS.infoText} />
+              ) : (
+                <Calendar size={14} color={COLORS.textLight} />
+              )}
+              <Text
+                style={[
+                  styles.dateText,
+                  item.status === "SCHEDULED" && { color: COLORS.infoText },
+                ]}
+              >
+                {formatDate(displayDate)}
+              </Text>
+            </View>
+            <Text style={styles.timeText}>• {formatTime(displayDate)}</Text>
+          </View>
+
+          <Text style={styles.priceText}>
+            {item.fare_estimate || item.price || 0}{" "}
+            <Text style={{ fontSize: 12, color: COLORS.textLight }}>DZD</Text>
+          </Text>
+        </View>
+
+        <View style={styles.divider} />
+
+        {/* --- Body: Timeline & Addresses --- */}
+        <View style={styles.cardBody}>
+          {/* 1. PICKUP ROW */}
+          <View style={[styles.itemRow, { flexDirection }]}>
+            <View style={styles.timelineColumn}>
+              <View
+                style={[
+                  styles.timelineDot,
+                  {
+                    backgroundColor: COLORS.mainPurple,
+                    borderColor: COLORS.mainPurple,
+                  },
+                ]}
+              />
+              <View style={styles.timelineLine} />
+            </View>
+            <View
+              style={[
+                styles.contentContainer,
+                isRTL ? { marginRight: 12 } : { marginLeft: 12 },
+              ]}
+            >
+              <Text style={[styles.label, { textAlign }]}>{t("pickup")}</Text>
+              <Text
+                numberOfLines={2}
+                style={[styles.addressText, { textAlign }]}
+              >
+                {item.pickup_address || t("pickupLocation")}
+              </Text>
+            </View>
+          </View>
+
+          {/* 2. DROPOFF ROW */}
+          <View style={[styles.itemRow, { flexDirection }]}>
+            <View style={styles.timelineColumn}>
+              <View
+                style={[
+                  styles.timelineDot,
+                  {
+                    backgroundColor: COLORS.accent,
+                    borderColor: COLORS.accent,
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.timelineLine,
+                  { backgroundColor: "transparent" },
+                ]}
+              />
+            </View>
+            <View
+              style={[
+                styles.contentContainer,
+                isRTL ? { marginRight: 12 } : { marginLeft: 12 },
+              ]}
+            >
+              <Text style={[styles.label, { textAlign }]}>{t("dropoff")}</Text>
+              <Text
+                numberOfLines={2}
+                style={[
+                  styles.addressText,
+                  { textAlign, marginBottom: 0, paddingBottom: 0 },
+                ]}
+              >
+                {item.dropoff_address || t("dropoffLocation")}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* --- Footer: Status & Chevron --- */}
+        <View style={[styles.cardFooter, { flexDirection }]}>
+          <View
+            style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}
+          >
+            <Text style={[styles.statusText, { color: statusStyle.text }]}>
+              {statusStyle.label}
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <Text style={styles.detailsLink}>
+              {t("viewDetails") || "Details"}
+            </Text>
+            <ChevronRight
+              size={16}
+              color={COLORS.mainPurple}
+              style={isRTL && { transform: [{ scaleX: -1 }] }}
+            />
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar
+        barStyle="dark-content"
+        backgroundColor="transparent"
+        translucent
+      />
 
-      {/* Header */}
+      {/* --- Header --- */}
       <View style={[styles.header, { flexDirection }]}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backBtn}
         >
-          <ArrowLeft
-            size={24}
-            color="black"
-            style={isRTL ? { transform: [{ scaleX: -1 }] } : {}}
-          />
+          {isRTL ? (
+            <ArrowRight size={24} color={COLORS.text} />
+          ) : (
+            <ArrowLeft size={24} color={COLORS.text} />
+          )}
         </TouchableOpacity>
-        <Text style={[styles.title, { textAlign }]}>{t("historyTitle")}</Text>
+        <Text style={styles.headerTitle}>{t("historyTitle")}</Text>
+        <View style={{ width: 40 }} />
       </View>
 
+      {/* --- Filter Bar --- */}
+      <View style={styles.filterContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.filterScrollContent,
+            { flexDirection: isRTL ? "row-reverse" : "row" },
+          ]}
+        >
+          {renderFilterButton("ALL", t("all") || "All")}
+          {renderFilterButton("SCHEDULED", t("scheduled") || "Scheduled")}
+          {renderFilterButton("COMPLETED", t("completed") || "Completed")}
+          {renderFilterButton("CANCELLED", t("cancelled") || "Cancelled")}
+        </ScrollView>
+      </View>
+
+      {/* --- Content --- */}
       {loading ? (
-        <ActivityIndicator
-          size="large"
-          color="#4f26afff"
-          style={{ marginTop: 50 }}
-        />
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={COLORS.mainPurple} />
+        </View>
       ) : (
         <FlatList
-          data={history}
+          data={getFilteredData()}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={{ padding: 20 }}
-          ListEmptyComponent={
-            <Text style={[styles.emptyText, { textAlign: "center" }]}>
-              {!session ? t("emptyNoSession") : t("emptyNoRides")}
-            </Text>
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          renderItem={renderItem}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[COLORS.mainPurple]} // Android color
+              tintColor={COLORS.mainPurple} // iOS color
+            />
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={() => navigation.navigate("RideDetails", { ride: item })}
-            >
-              <View style={styles.card}>
-                {/* Price and Status Row */}
-                <View style={[styles.rowBetween, { flexDirection }]}>
-                  <Text
-                    style={[
-                      styles.status,
-                      { textAlign },
-                      item.status === "COMPLETED"
-                        ? { color: "green" }
-                        : { color: "red" },
-                    ]}
-                  >
-                    {getStatusText(item.status)}
-                  </Text>
-                  <Text style={styles.price}>{item.fare_estimate} DZD</Text>
-                </View>
-
-                {/* Date/Time Row */}
-                <View style={[styles.dateRow, { flexDirection }]}>
-                  <Clock size={14} color="gray" />
-                  <Text style={styles.dateText}>
-                    {formatDate(item.created_at)}
-                  </Text>
-                </View>
-
-                {/* Addresses */}
-                <View style={styles.timeline}>
-                  {/* Pickup */}
-                  <View style={[styles.locRow, { flexDirection }]}>
-                    <MapPin size={16} color="green" />
-                    <Text
-                      style={[styles.address, { textAlign }]}
-                      numberOfLines={1}
-                    >
-                      {item.pickup_address ||
-                        t("pickupLocation") ||
-                        "Pickup location"}
-                    </Text>
-                  </View>
-
-                  {/* Dotted Line */}
-                  <View
-                    style={[
-                      styles.line,
-                      isRTL ? { marginRight: 7 } : { marginLeft: 7 },
-                    ]}
-                  />
-
-                  {/* Dropoff */}
-                  <View style={[styles.locRow, { flexDirection }]}>
-                    <MapPin size={16} color="red" />
-                    <Text
-                      style={[styles.address, { textAlign }]}
-                      numberOfLines={1}
-                    >
-                      {item.dropoff_address ||
-                        t("dropoffLocation") ||
-                        "Dropoff location"}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* "View Details" Link */}
-                <View style={styles.detailsLinkContainer}>
-                  <Text style={[styles.detailsLink, { textAlign }]}>
-                    {t("viewDetails") || "viewDetails"}
-                  </Text>
-                </View>
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIconCircle}>
+                <History size={40} color={COLORS.textLight} />
               </View>
-            </TouchableOpacity>
-          )}
+              <Text style={styles.emptyTitle}>
+                {t("emptyNoRides") || "No Rides Found"}
+              </Text>
+              <Text style={styles.emptySubtitle}>
+                {t("emptyNoRidesSub") || "Try changing the filter."}
+              </Text>
+            </View>
+          }
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
+  container: { flex: 1, backgroundColor: COLORS.background },
+  centerContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+  // Header
   header: {
+    height: 60,
     alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: "white",
-    borderBottomWidth: 1,
-    borderColor: "#eee",
-    marginTop: 30,
+    backgroundColor: COLORS.background,
   },
   backBtn: {
-    padding: 5,
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 20,
+    backgroundColor: "white",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
   },
-  title: {
-    fontSize: 20,
+  headerTitle: {
+    fontSize: 18,
     fontFamily: "Tajawal_700Bold",
-    marginHorizontal: 15, // Use marginHorizontal so it works for both LTR/RTL
+    color: COLORS.text,
   },
+
+  // Filters
+  filterContainer: {
+    height: 50,
+    marginBottom: 5,
+  },
+  filterScrollContent: {
+    paddingHorizontal: 20,
+    alignItems: "center",
+    gap: 10,
+  },
+  filterBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: "white",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  filterBtnActive: {
+    backgroundColor: COLORS.mainPurple,
+    borderColor: COLORS.mainPurple,
+  },
+  filterBtnText: {
+    fontSize: 13,
+    fontFamily: "Tajawal_500Medium",
+    color: COLORS.textLight,
+  },
+  filterBtnTextActive: {
+    color: "white",
+    fontFamily: "Tajawal_700Bold",
+  },
+
+  // List
+  listContent: { padding: 20, paddingBottom: 40 },
+
+  // Card
   card: {
     backgroundColor: "white",
-    padding: 15,
-    borderRadius: 12,
-    marginBottom: 15,
+    borderRadius: 16,
+    marginBottom: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
+    shadowRadius: 4,
     elevation: 2,
   },
-  rowBetween: {
+  cardHeader: {
     justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  status: {
-    fontSize: 12,
-    fontFamily: "Tajawal_700Bold",
-  },
-  price: {
-    fontSize: 16,
-    fontFamily: "Tajawal_700Bold",
-  },
-  dateRow: {
     alignItems: "center",
-    gap: 5,
-    marginBottom: 15,
+    marginBottom: 12,
+  },
+  dateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    gap: 4,
   },
   dateText: {
-    color: "gray",
+    fontSize: 12,
+    fontFamily: "Tajawal_500Medium",
+    color: COLORS.text,
+  },
+  timeText: {
     fontSize: 12,
     fontFamily: "Tajawal_400Regular",
+    color: COLORS.textLight,
   },
-  timeline: {
-    gap: 5,
+  priceText: {
+    fontSize: 18,
+    fontFamily: "Tajawal_700Bold",
+    color: COLORS.mainPurple,
   },
-  locRow: {
-    gap: 10,
-    alignItems: "center",
-  },
-  address: {
-    fontSize: 14,
-    color: "#333",
-    flex: 1,
-    fontFamily: "Tajawal_500Medium",
-  },
-  line: {
+  divider: { height: 1, backgroundColor: COLORS.background, marginBottom: 12 },
+
+  // Timeline
+  cardBody: { marginBottom: 10 },
+  itemRow: { alignItems: "flex-start" },
+  timelineColumn: { width: 20, alignItems: "center", alignSelf: "stretch" },
+  timelineDot: {
+    width: 10,
     height: 10,
-    width: 1,
-    backgroundColor: "#ccc",
+    borderRadius: 5,
+    borderWidth: 2,
+    marginTop: 5,
+    zIndex: 2,
+    backgroundColor: "white",
   },
-  detailsLinkContainer: {
+  timelineLine: {
+    flex: 1,
+    width: 2,
+    backgroundColor: "#E5E7EB",
+    marginVertical: -2,
+  },
+  contentContainer: { flex: 1 },
+  label: {
+    fontSize: 11,
+    color: COLORS.textLight,
+    fontFamily: "Tajawal_700Bold",
+    marginBottom: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  addressText: {
+    fontSize: 14,
+    color: COLORS.text,
+    fontFamily: "Tajawal_500Medium",
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+
+  // Footer
+  cardFooter: {
+    justifyContent: "space-between",
+    alignItems: "center",
     marginTop: 10,
-    borderTopWidth: 1,
-    borderColor: "#eee",
-    paddingTop: 10,
+  },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  statusText: {
+    fontSize: 11,
+    fontFamily: "Tajawal_700Bold",
+    textTransform: "uppercase",
   },
   detailsLink: {
-    color: "#4f26afff",
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: "Tajawal_700Bold",
+    color: COLORS.mainPurple,
   },
-  emptyText: {
-    marginTop: 50,
-    color: "gray",
-    fontFamily: "Tajawal_500Medium",
+
+  // Empty State
+  emptyContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 60,
+  },
+  emptyIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontFamily: "Tajawal_700Bold",
+    color: COLORS.text,
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    fontFamily: "Tajawal_400Regular",
+    color: COLORS.textLight,
+    textAlign: "center",
   },
 });

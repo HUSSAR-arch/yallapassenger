@@ -491,7 +491,7 @@ export default function OnboardingScreen() {
 const styles = StyleSheet.create({
   welcomeContainer: {
     flex: 1,
-    backgroundColor: "#4f26afff",
+    backgroundColor: "#45986cff",
     alignItems: "center",
     justifyContent: "center",
     padding: 20,

@@ -20,7 +20,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.yalladz.driver",
+      "package": "com.yalladz.passenger",
       "googleServicesFile": "./google-services.json",
       "config": {
         "googleMaps": {
@@ -34,18 +34,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/notification.png",
-          "color": "#ffffff",
-          "sounds": ["./assets/notification.wav"]        }
-      ],
-      "expo-font"
+      "expo-notifications",
+      "expo-font",
+      "@react-native-google-signin/google-signin",
+      "@react-native-community/datetimepicker"
     ],
     "extra": {
       "eas": {
-        "projectId": "4725b1e9-174a-4063-aa02-69e3cd14c408"
+        "projectId": "09a6c5f4-9e83-4eea-8b6f-97384074d7a0"
       }
     }
   }

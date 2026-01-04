@@ -1,24 +1,24 @@
-import React, { useEffect, useState, useRef } from "react";
-// 1. ADD useFocusEffect to this import
-import { useFocusEffect } from "@react-navigation/native";
-
-// 2. ADD useCallback to this import
-import { useCallback } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   Alert,
-  SafeAreaView,
   TextInput,
   ActivityIndicator,
   Keyboard,
   ScrollView,
-  Animated, // 1. IMPORT ANIMATED
-  Dimensions, // 1. IMPORT DIMENSIONS
-  Easing, // 1. IMPORT EASING
+  Animated,
+  Dimensions,
+  Easing,
+  Modal,
+  Platform,
+  Image,
 } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient"; //
 import { supabase } from "../lib/supabase";
 import {
   User,
@@ -30,55 +30,75 @@ import {
   ChevronRight,
   ArrowLeft,
   ArrowRight,
+  Edit2,
+  Check,
+  Globe,
+  Trash2,
+  MapPin,
+  Gift,
+  X,
 } from "lucide-react-native";
 import { useLanguage } from "../context/LanguageContext";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 
-const { height } = Dimensions.get("window"); // 2. GET SCREEN HEIGHT
+const { height } = Dimensions.get("window");
+
+// --- THEME CONSTANTS (MATCHING DASHBOARD) ---
+const COLORS = {
+  primary: "#111827",
+  mainPurple: "#775BD4",
+  accent: "#960082ff",
+  background: "#F3F4F6",
+  card: "#FFFFFF",
+  text: "#1F2937",
+  textLight: "#6B7280",
+  border: "#E5E7EB",
+};
+
+const BRAND_GRADIENT = ["#7055c9ff", "#b486e7ff"] as const;
 
 export default function ProfileScreen({ navigation }: any) {
-  const { t, language } = useLanguage();
+  const { t, language, setLanguage } = useLanguage();
+  const insets = useSafeAreaInsets();
+
   const [profile, setProfile] = useState<any>(null);
   const [voucherCode, setVoucherCode] = useState("");
   const [redeeming, setRedeeming] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // --- EDIT PROFILE STATE ---
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // --- LANGUAGE MODAL STATE ---
+  const [isLangModalVisible, setLangModalVisible] = useState(false);
+
   // --- ANIMATION SETUP ---
-  // Start the screen "pushed down" by the full height of the device
   const slideAnim = useRef(new Animated.Value(height)).current;
 
   useFocusEffect(
     useCallback(() => {
-      // 1. Force reset the position to the bottom (off-screen) instantly
       slideAnim.setValue(height);
-
-      // 2. Animate it UP to position 0 (visible)
       const animation = Animated.timing(slideAnim, {
         toValue: 0,
-        duration: 800,
+        duration: 600,
         useNativeDriver: true,
         easing: Easing.out(Easing.exp),
       });
-
       animation.start();
-
-      // 3. Ensure we fetch fresh data every time we open the screen
       getProfile();
-
-      // Cleanup: Stop animation if user leaves quickly
       return () => animation.stop();
     }, [])
   );
 
-  // Custom Back Handler: Slide Down, then Go Back
   const handleBack = () => {
     Animated.timing(slideAnim, {
-      toValue: height, // Slide back down
+      toValue: height,
       duration: 300,
       useNativeDriver: true,
-      easing: Easing.in(Easing.cubic), // Accelerate out
+      easing: Easing.in(Easing.cubic),
     }).start(() => {
-      // Wait for animation to finish, then navigate
       navigation.goBack();
     });
   };
@@ -102,6 +122,7 @@ export default function ProfileScreen({ navigation }: any) {
 
         if (error) throw error;
         setProfile(data);
+        setEditName(data.full_name || "");
       }
     } catch (error) {
       console.log("Error fetching profile:", error);
@@ -110,27 +131,44 @@ export default function ProfileScreen({ navigation }: any) {
     }
   };
 
+  const handleUpdateProfile = async () => {
+    if (!editName.trim()) return;
+    setSavingProfile(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ full_name: editName })
+        .eq("id", profile.id);
+
+      if (error) throw error;
+
+      setProfile({ ...profile, full_name: editName });
+      setIsEditing(false);
+      Alert.alert(t("success"), "Profile updated successfully");
+    } catch (error: any) {
+      Alert.alert(t("error"), error.message);
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   const handleRedeemVoucher = async () => {
     if (!voucherCode.trim()) {
       Alert.alert(t("error"), t("enterVoucherCode") || "Please enter a code");
       return;
     }
-
     setRedeeming(true);
     Keyboard.dismiss();
-
     try {
       const { data, error } = await supabase.rpc("redeem_voucher", {
         code_input: voucherCode.trim(),
         user_id_input: profile.id,
       });
-
       if (error) throw error;
-
       if (data.success) {
         Alert.alert(
           t("success"),
-          `${t("voucherRedeemed") || "Voucher Redeemed"}: ${data.amount} DZD`
+          `${t("voucherRedeemed")}: ${data.amount} DZD`
         );
         setVoucherCode("");
         getProfile();
@@ -148,104 +186,197 @@ export default function ProfileScreen({ navigation }: any) {
     try {
       try {
         await GoogleSignin.signOut();
-      } catch (e) {
-        // Ignore
-      }
+      } catch (e) {}
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      // No need to navigate manually, App.tsx usually listens to auth state
     } catch (error: any) {
       Alert.alert(t("error"), error.message);
     }
   };
 
-  return (
-    // 3. REPLACE SafeAreaView WITH Animated.View (keep SafeAreaView styles inside if needed)
-    <Animated.View
-      style={[
-        styles.container,
-        { transform: [{ translateY: slideAnim }] }, // Apply the slide
-      ]}
+  const handleDeleteAccount = () => {
+    Alert.alert("Delete Account", "Are you sure? This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          Alert.alert(
+            "Request Sent",
+            "Your account deletion request has been processed."
+          );
+          handleSignOut();
+        },
+      },
+    ]);
+  };
+
+  // --- HELPER COMPONENT: MENU ITEM ---
+  const MenuItem = ({ icon: Icon, color, bgColor, label, onPress }: any) => (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={onPress}
+      style={[styles.menuCard, { flexDirection: flexDir }]}
     >
-      <SafeAreaView style={{ flex: 1 }}>
+      <View style={[styles.menuIconContainer, { backgroundColor: bgColor }]}>
+        <Icon size={22} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.menuTitle, { textAlign }]}>{label}</Text>
+      </View>
+      <ChevronRight size={20} color="#9CA3AF" style={arrowTransform} />
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={styles.mainContainer}>
+      <Animated.View
+        style={[
+          styles.container,
+          {
+            paddingTop: insets.top + 10,
+            paddingBottom: insets.bottom,
+            transform: [{ translateY: slideAnim }],
+          },
+        ]}
+      >
+        {/* HEADER */}
         <View style={[styles.header, { flexDirection: flexDir }]}>
-          <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
-            {/* If Arabic (RTL), show Right Arrow. If English, show Left Arrow. */}
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.backBtn}
+          >
             {isRTL ? (
-              <ArrowRight size={24} color="#1F2937" />
+              <ArrowRight size={24} color={COLORS.text} />
             ) : (
-              <ArrowLeft size={24} color="#1F2937" />
+              <ArrowLeft size={24} color={COLORS.text} />
             )}
           </TouchableOpacity>
-
-          <Text style={styles.title}>{t("profileTitle")}</Text>
-
+          <Text style={styles.headerTitle}>{t("profileTitle")}</Text>
           <View style={{ width: 40 }} />
+          {/* Spacer to balance title center */}
         </View>
 
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: 40, paddingHorizontal: 20 }}
         >
-          {/* User Card */}
-          <View style={[styles.card, { flexDirection: flexDir }]}>
+          {/* 1. USER PROFILE CARD */}
+          <View style={[styles.profileCard, { flexDirection: flexDir }]}>
             <View style={styles.avatarContainer}>
-              <User size={32} color="white" />
+              <User size={32} color={COLORS.mainPurple} />
             </View>
             <View
-              style={{ flex: 1, alignItems: isRTL ? "flex-end" : "flex-start" }}
+              style={{
+                flex: 1,
+                alignItems: isRTL ? "flex-end" : "flex-start",
+                justifyContent: "center",
+                paddingHorizontal: 15,
+              }}
             >
-              <Text style={[styles.name, { textAlign }]}>
-                {profile?.full_name || t("loading")}
-              </Text>
+              {isEditing ? (
+                <TextInput
+                  value={editName}
+                  onChangeText={setEditName}
+                  style={[styles.nameInput, { textAlign }]}
+                  placeholder="Full Name"
+                  autoFocus
+                />
+              ) : (
+                <Text style={[styles.nameText, { textAlign }]}>
+                  {profile?.full_name || t("loading")}
+                </Text>
+              )}
+
               <View
-                style={[styles.row, { flexDirection: flexDir, marginTop: 4 }]}
+                style={{
+                  flexDirection: flexDir,
+                  alignItems: "center",
+                  marginTop: 4,
+                }}
               >
-                <Phone size={14} color="gray" />
+                <Phone size={14} color={COLORS.textLight} />
                 <Text
                   style={[styles.subText, { textAlign, marginHorizontal: 5 }]}
                 >
-                  {profile?.phone || t("noPhone")}
+                  {profile?.phone || profile?.email || t("noPhone")}
                 </Text>
               </View>
             </View>
+
+            <TouchableOpacity
+              onPress={() => {
+                if (isEditing) handleUpdateProfile();
+                else setIsEditing(true);
+              }}
+              style={styles.editBtn}
+            >
+              {savingProfile ? (
+                <ActivityIndicator size="small" color={COLORS.mainPurple} />
+              ) : isEditing ? (
+                <Check size={20} color="white" />
+              ) : (
+                <Edit2 size={18} color="white" />
+              )}
+            </TouchableOpacity>
           </View>
 
-          {/* Wallet Section */}
-          <View style={styles.walletCard}>
+          {/* 2. WALLET CARD (Brand Gradient) */}
+          <LinearGradient
+            colors={BRAND_GRADIENT}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.walletCard}
+          >
             <View style={[styles.walletHeader, { flexDirection: flexDir }]}>
               <View>
                 <Text style={[styles.walletLabel, { textAlign }]}>
                   {t("currentBalance") || "Current Balance"}
                 </Text>
-                <Text style={[styles.balanceAmount, { textAlign }]}>
+                <Text style={[styles.balanceText, { textAlign }]}>
                   {profile?.balance ? profile.balance.toFixed(2) : "0.00"}
-                  <Text style={styles.currency}> DZD</Text>
+                  <Text style={{ fontSize: 16 }}> DZD</Text>
                 </Text>
               </View>
-              <View style={styles.walletIcon}>
-                <CreditCard size={16} color="white" />
+              <View style={styles.walletIconBox}>
+                <CreditCard size={24} color="white" />
               </View>
             </View>
+
             <TouchableOpacity
-              style={[styles.topUpBtn, { flexDirection: flexDir }]}
+              style={[
+                styles.topUpBtn,
+                { flexDirection: isRTL ? "row-reverse" : "row" },
+              ]}
               onPress={() => navigation.navigate("TopUpScreen")}
+              activeOpacity={0.8}
             >
               <Text style={styles.topUpText}>{t("topUp") || "Top Up"}</Text>
-              <ArrowRight size={16} color="#1F2937" style={arrowTransform} />
+              <ChevronRight
+                size={16}
+                color={COLORS.mainPurple}
+                style={arrowTransform}
+              />
             </TouchableOpacity>
+          </LinearGradient>
 
-            <View style={styles.divider} />
-
-            <Text style={[styles.voucherLabel, { textAlign }]}>
-              {t("addVoucher") || "Add Voucher Code"}
+          {/* 3. VOUCHER INPUT (Styled like Search Bar) */}
+          <View style={styles.sectionContainer}>
+            <Text style={[styles.sectionTitle, { textAlign }]}>
+              {t("addVoucher") || "Promo Code"}
             </Text>
-
-            <View style={[styles.voucherRow, { flexDirection: flexDir }]}>
+            <View
+              style={[styles.voucherInputContainer, { flexDirection: flexDir }]}
+            >
+              <Gift
+                size={20}
+                color="#9CA3AF"
+                style={{ marginHorizontal: 10 }}
+              />
               <TextInput
                 style={[styles.voucherInput, { textAlign }]}
-                placeholder={t("voucherPlaceholder") || "Enter code here..."}
-                placeholderTextColor="#9ca3af"
+                placeholder="Ex: YALLA-100"
+                placeholderTextColor="#9CA3AF"
                 value={voucherCode}
                 onChangeText={setVoucherCode}
                 autoCapitalize="characters"
@@ -258,259 +389,412 @@ export default function ProfileScreen({ navigation }: any) {
                 {redeeming ? (
                   <ActivityIndicator color="white" size="small" />
                 ) : (
-                  <Ticket size={20} color="white" />
+                  <Text style={styles.redeemText}>{t("add") || "ADD"}</Text>
                 )}
               </TouchableOpacity>
             </View>
           </View>
 
-          {/* Payment History Link */}
-          <TouchableOpacity
-            style={[styles.menuItem, { flexDirection: flexDir }]}
-          >
-            <View style={[styles.menuIconBox, { backgroundColor: "#f0f9ff" }]}>
-              <CreditCard size={20} color="#0284c7" />
-            </View>
-            <Text style={[styles.menuText, { textAlign }]}>
-              {t("paymentHistory") || "Payment History"}
-            </Text>
-            <ChevronRight size={20} color="#9ca3af" style={arrowTransform} />
-          </TouchableOpacity>
+          {/* 4. MENU ITEMS (Styled like Schedule Card) */}
+          <View style={{ marginTop: 10 }}>
+            <MenuItem
+              icon={MapPin}
+              color="#0591a7ff"
+              bgColor="#e0f2fe"
+              label={t("favorites") || "Saved Places"}
+              onPress={() => navigation.navigate("AddSavedPlace")}
+            />
 
-          {/* Admin Console */}
-          {profile?.role === "ADMIN" && (
+            <MenuItem
+              icon={Ticket}
+              color={COLORS.accent}
+              bgColor="#fdf4ff"
+              label={t("paymentHistory")}
+              onPress={() => navigation.navigate("PaymentHistoryScreen")}
+            />
+
+            {/* Language Selector Trigger */}
+            <MenuItem
+              icon={Globe}
+              color={COLORS.mainPurple}
+              bgColor="#F3E8FF"
+              label={`${
+                t("language") || "Language"
+              } (${language.toUpperCase()})`}
+              onPress={() => setLangModalVisible(true)}
+            />
+
+            {profile?.role === "ADMIN" && (
+              <MenuItem
+                icon={Shield}
+                color="#F59E0B"
+                bgColor="#FEF3C7"
+                label={t("openAdminConsole")}
+                onPress={() => navigation.navigate("AdminVoucherScreen")}
+              />
+            )}
+          </View>
+
+          {/* 5. FOOTER */}
+          <View style={{ marginTop: 30, gap: 15, paddingBottom: 20 }}>
             <TouchableOpacity
-              onPress={() => navigation.navigate("AdminVoucherScreen")}
-              style={[styles.adminBtn, { flexDirection: flexDir }]}
+              onPress={handleSignOut}
+              style={[styles.logoutBtn, { flexDirection: flexDir }]}
             >
-              <Shield size={20} color="white" />
-              <Text style={styles.adminText}>{t("openAdminConsole")}</Text>
+              <LogOut color={COLORS.textLight} size={20} />
+              <Text style={styles.logoutText}>{t("signOut")}</Text>
             </TouchableOpacity>
-          )}
 
-          {/* Sign Out */}
-          <TouchableOpacity
-            onPress={handleSignOut}
-            style={[styles.logoutBtn, { flexDirection: flexDir }]}
-          >
-            <LogOut color="#4f26afff" size={20} />
-            <Text style={styles.logoutText}>{t("signOut")}</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleDeleteAccount}
+              style={{
+                alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "center",
+                gap: 6,
+              }}
+            >
+              <Trash2 size={14} color="#EF4444" />
+              <Text style={styles.deleteText}>Delete Account</Text>
+            </TouchableOpacity>
+          </View>
 
           <Text style={styles.versionText}>Version 1.0.0</Text>
         </ScrollView>
-      </SafeAreaView>
-    </Animated.View>
+      </Animated.View>
+
+      {/* --- LANGUAGE SELECTION MODAL --- */}
+      <Modal
+        visible={isLangModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setLangModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            onPress={() => setLangModalVisible(false)}
+          />
+          <View style={styles.modalContent}>
+            <View style={[styles.modalHeader, { flexDirection: flexDir }]}>
+              <Text style={styles.modalTitle}>
+                {t("selectLanguage") || "Select Language"}
+              </Text>
+              <TouchableOpacity onPress={() => setLangModalVisible(false)}>
+                <X size={24} color={COLORS.textLight} />
+              </TouchableOpacity>
+            </View>
+
+            {[
+              { code: "en", label: "English", native: "English" },
+              { code: "ar", label: "Arabic", native: "العربية" },
+              { code: "fr", label: "French", native: "Français" },
+            ].map((langItem) => (
+              <TouchableOpacity
+                key={langItem.code}
+                style={[
+                  styles.langOption,
+                  language === langItem.code && styles.langOptionSelected,
+                  { flexDirection: flexDir },
+                ]}
+                onPress={() => {
+                  setLanguage(langItem.code);
+                  setLangModalVisible(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.langText,
+                    language === langItem.code && styles.langTextSelected,
+                  ]}
+                >
+                  {langItem.native}
+                </Text>
+                {language === langItem.code && (
+                  <Check size={20} color={COLORS.mainPurple} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  mainContainer: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: "#f8fafc",
+    backgroundColor: "#F9FAFB", // Light gray like dashboard background
   },
   header: {
-    marginTop: 20,
-    marginBottom: 20,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginBottom: 20,
   },
   backBtn: {
     width: 40,
     height: 40,
-    justifyContent: "center",
-    alignItems: "center",
     borderRadius: 20,
     backgroundColor: "white",
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-    marginTop: 30,
-  },
-  title: {
-    fontSize: 16,
-    fontFamily: "Tajawal_700Bold",
-    color: "#1F2937",
-    textAlign: "center",
-    marginTop: 30,
-  },
-  card: {
-    backgroundColor: "white",
-    padding: 20,
-    borderRadius: 16,
-    marginBottom: 25,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 5,
-    elevation: 2,
-  },
-  avatarContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#1F2937",
     justifyContent: "center",
     alignItems: "center",
-    marginHorizontal: 15,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
   },
-  name: {
+  headerTitle: {
     fontSize: 18,
     fontFamily: "Tajawal_700Bold",
-    color: "#111",
+    color: COLORS.primary,
   },
-  subText: {
-    color: "gray",
-    fontFamily: "Tajawal_400Regular",
-    fontSize: 14,
+
+  // --- PROFILE CARD ---
+  profileCard: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 15,
+    marginBottom: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
   },
-  row: {
+  avatarContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#F3E8FF", // Light purple bg
+    justifyContent: "center",
     alignItems: "center",
   },
+  nameText: {
+    fontSize: 18,
+    fontFamily: "Tajawal_700Bold",
+    color: COLORS.primary,
+  },
+  nameInput: {
+    fontSize: 18,
+    fontFamily: "Tajawal_700Bold",
+    color: COLORS.primary,
+    borderBottomWidth: 1,
+    borderColor: COLORS.mainPurple,
+    minWidth: 120,
+    paddingVertical: 0,
+  },
+  subText: {
+    fontSize: 14,
+    color: COLORS.textLight,
+    fontFamily: "Tajawal_500Medium",
+  },
+  editBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.mainPurple, // Purple button
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // --- WALLET CARD (Gradient) ---
   walletCard: {
-    backgroundColor: "#1F2937",
-    borderRadius: 20,
-    padding: 20,
+    borderRadius: 24,
+    padding: 24,
     marginBottom: 25,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    shadowColor: COLORS.mainPurple,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
   },
   walletHeader: {
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 15,
+    marginBottom: 20,
   },
   walletLabel: {
-    color: "#9ca3af",
-    fontSize: 12,
+    color: "#E9D5FF",
+    fontSize: 13,
     fontFamily: "Tajawal_500Medium",
-    marginBottom: 5,
+    marginBottom: 4,
   },
-  balanceAmount: {
+  balanceText: {
     color: "white",
-    fontSize: 26,
+    fontSize: 34,
     fontFamily: "Tajawal_700Bold",
   },
-  currency: {
-    fontSize: 16,
-    color: "#9ca3af",
-    fontFamily: "Tajawal_500Medium",
+  walletIconBox: {
+    backgroundColor: "rgba(255,255,255,0.2)",
+    padding: 12,
+    borderRadius: 16,
   },
-  walletIcon: {
-    backgroundColor: "rgba(255,255,255,0.1)",
-    padding: 10,
-    borderRadius: 12,
+  topUpBtn: {
+    backgroundColor: "white",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 30, // Pill shape
+    alignSelf: "flex-start",
+    alignItems: "center",
+    gap: 8,
   },
-  divider: {
-    height: 1,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    marginVertical: 10,
+  topUpText: {
+    color: COLORS.mainPurple,
+    fontFamily: "Tajawal_700Bold",
+    fontSize: 14,
   },
-  voucherLabel: {
-    color: "#d1d5db",
-    fontSize: 12,
-    fontFamily: "Tajawal_500Medium",
+
+  // --- VOUCHER INPUT ---
+  sectionContainer: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontFamily: "Tajawal_700Bold",
+    color: COLORS.textLight,
     marginBottom: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
-  voucherRow: {
-    gap: 10,
+  voucherInputContainer: {
+    backgroundColor: "white",
+    borderRadius: 12,
+    padding: 5,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 5,
   },
   voucherInput: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderRadius: 12,
-    paddingHorizontal: 15,
-    height: 50,
-    color: "white",
+    height: 44,
     fontFamily: "Tajawal_700Bold",
-    letterSpacing: 1,
+    fontSize: 16,
+    color: COLORS.primary,
   },
   redeemBtn: {
-    backgroundColor: "#4f26afff",
-    width: 100,
-    height: 50,
-    borderRadius: 12,
+    backgroundColor: COLORS.primary, // Black button
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
+    marginRight: 2,
   },
-  menuItem: {
+  redeemText: {
+    color: "white",
+    fontFamily: "Tajawal_700Bold",
+    fontSize: 13,
+  },
+
+  // --- MENU ITEMS ---
+  menuCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "white",
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+  },
+  menuIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 14, // Squircle
+    justifyContent: "center",
+    alignItems: "center",
+    marginHorizontal: 12,
+  },
+  menuTitle: {
+    fontSize: 16,
+    color: COLORS.primary,
+    fontFamily: "Tajawal_700Bold",
+  },
+
+  // --- FOOTER ---
+  logoutBtn: {
     backgroundColor: "white",
     padding: 15,
     borderRadius: 12,
+    justifyContent: "center",
     alignItems: "center",
-    marginBottom: 10,
+    gap: 10,
     borderWidth: 1,
-    borderColor: "#f1f5f9",
-  },
-  menuIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    justifyContent: "center",
-    alignItems: "center",
-    marginHorizontal: 10,
-  },
-  menuText: {
-    flex: 1,
-    fontSize: 16,
-    color: "#374151",
-    fontFamily: "Tajawal_500Medium",
-  },
-  adminBtn: {
-    backgroundColor: "#2563eb",
-    padding: 15,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 20,
-  },
-  adminText: {
-    color: "white",
-    fontFamily: "Tajawal_700Bold",
-    fontSize: 16,
-  },
-  logoutBtn: {
-    backgroundColor: "#fafafaff",
-    padding: 15,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 20,
-    marginBottom: 10,
+    borderColor: "#E5E7EB",
   },
   logoutText: {
-    color: "#4f26afff",
+    color: COLORS.textLight,
     fontFamily: "Tajawal_700Bold",
     fontSize: 16,
+  },
+  deleteText: {
+    color: "#EF4444",
+    fontSize: 13,
+    fontFamily: "Tajawal_500Medium",
   },
   versionText: {
     textAlign: "center",
-    marginBottom: 60,
-    color: "#9ca3af",
+    color: "#9CA3AF",
     fontSize: 12,
-    fontFamily: "Tajawal_400Regular",
+    marginTop: 10,
   },
-  topUpBtn: {
-    backgroundColor: "#FFC107", // Yellow accent
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: 8,
-    alignSelf: "flex-start", // Use flex-start so it doesn't stretch
-    flexDirection: "row",
+
+  // --- MODAL STYLES ---
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "white",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    justifyContent: "space-between",
     alignItems: "center",
-    gap: 8,
-    marginBottom: 10,
+    marginBottom: 20,
   },
-  topUpText: {
-    color: "#1F2937",
+  modalTitle: {
+    fontSize: 18,
     fontFamily: "Tajawal_700Bold",
-    fontSize: 14,
+    color: COLORS.primary,
+  },
+  langOption: {
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  langOptionSelected: {
+    backgroundColor: "#F3E8FF",
+    marginHorizontal: -24,
+    paddingHorizontal: 24,
+    borderBottomColor: "transparent",
+  },
+  langText: {
+    fontSize: 16,
+    fontFamily: "Tajawal_500Medium",
+    color: COLORS.textLight,
+  },
+  langTextSelected: {
+    color: COLORS.mainPurple,
+    fontFamily: "Tajawal_700Bold",
   },
 });

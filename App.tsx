@@ -3,6 +3,8 @@ import MenuScreen from "./src/screens/MenuScreen";
 import TopUpScreen from "./src/screens/TopUpScreen";
 import SupportScreen from "./src/screens/SupportScreen";
 import TicketChatScreen from "./src/screens/TicketChatScreen";
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import PaymentHistoryScreen from "./src/screens/PaymentHistoryScreen";
 import {
   View,
   ActivityIndicator,
@@ -261,6 +263,11 @@ function MainApp() {
               component={RideDetailsScreen}
               options={{ headerShown: false }}
             />
+            <Stack.Screen
+  name="PaymentHistoryScreen"
+  component={PaymentHistoryScreen}
+  options={{ headerShown: false }}
+/>
           </>
         )}
       </Stack.Navigator>
@@ -273,8 +280,10 @@ function MainApp() {
 // =================================================================
 export default function App() {
   return (
-    <LanguageProvider>
-      <MainApp />
-    </LanguageProvider>
+    <SafeAreaProvider>
+      <LanguageProvider>
+        <MainApp />
+      </LanguageProvider>
+    </SafeAreaProvider>
   );
 }

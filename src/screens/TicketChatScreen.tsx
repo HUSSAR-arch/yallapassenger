@@ -261,7 +261,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
   },
   bubbleMe: {
-    backgroundColor: "#4f26afff",
+    backgroundColor: "#45986cff",
     borderBottomRightRadius: 2,
   },
   bubbleSupport: {
@@ -303,7 +303,7 @@ const styles = StyleSheet.create({
     marginBottom: 10, // Reduced from 50
     width: 45,
     height: 45,
-    backgroundColor: "#4f26afff",
+    backgroundColor: "#45986cff",
     borderRadius: 25,
     justifyContent: "center",
     alignItems: "center",

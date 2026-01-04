@@ -134,7 +134,7 @@ export default function SupportScreen() {
       >
         <MessageCircle
           size={24}
-          color={item.status === "resolved" ? "green" : "#4f26afff"}
+          color={item.status === "resolved" ? "green" : "#45986cff"}
         />
       </View>
 
@@ -190,7 +190,7 @@ export default function SupportScreen() {
         <ActivityIndicator
           style={{ marginTop: 50 }}
           size="large"
-          color="#4f26afff"
+          color="#45986cff"
         />
       ) : (
         <FlatList
@@ -339,7 +339,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: "#4f26afff",
+    backgroundColor: "#45986cff",
     justifyContent: "center",
     alignItems: "center",
     elevation: 5,
@@ -373,7 +373,7 @@ const styles = StyleSheet.create({
     fontFamily: "Tajawal_400Regular",
   },
   submitBtn: {
-    backgroundColor: "#4f26afff",
+    backgroundColor: "#45986cff",
     padding: 15,
     borderRadius: 10,
     alignItems: "center",
